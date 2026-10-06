@@ -1,0 +1,7 @@
+{
+  "name": "gestaovista",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Gestão a Vista – Delly's (site estático + funções da Vercel)",
+  "engines": { "node": "20.x" }
+}
