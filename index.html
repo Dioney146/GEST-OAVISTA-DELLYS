@@ -5,135 +5,227 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Liberados x Montados</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="style.css" />
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <script src="mapa-brasil.js"></script>
 </head>
 <body>
-  <header class="topo">
-    <div>
-      <h1>Liberados <span>x</span> Montados</h1>
-      <p>Quantos pedidos liberados (Whyntor) já foram montados no RoadNet, por estado.</p>
-    </div>
-    <button id="btnLimpar" class="btn ghost">Limpar tudo</button>
-  </header>
-
   <main>
-    <!-- IMPORTAÇÃO -->
-    <section class="drop todos" id="dropTodos">
-      <input type="file" id="fileTodos" accept=".xls,.xlsx,.csv" multiple hidden />
-      <div class="todos-icone">⇪</div>
-      <div>
-        <h2>Arraste aqui todos os arquivos de uma vez</h2>
-        <p class="hint">LIBERADOS_*.xls e MONTADOS_*.xlsx — o site separa liberados/montados e o estado pelo nome do arquivo.
-          MONTADOS_BA e MONTADOS_BA_SF entram juntos em BA.</p>
-      </div>
-    </section>
-
-    <section class="uploads">
-      <div class="drop" id="dropLib">
-        <div class="drop-tag lib">L</div>
-        <h2>Liberados</h2>
-        <p class="hint">Whyntor · coluna NUMPED</p>
-        <input type="file" id="fileLib" accept=".xls,.xlsx,.csv" multiple hidden />
-        <div class="info" id="infoLib">Nenhum arquivo</div>
-      </div>
-
-      <div class="drop" id="dropMon">
-        <div class="drop-tag mon">M</div>
-        <h2>Montados</h2>
-        <p class="hint">RoadNet · coluna Número do pedido</p>
-        <input type="file" id="fileMon" accept=".xls,.xlsx,.csv" multiple hidden />
-        <div class="info" id="infoMon">Nenhum arquivo</div>
-      </div>
-    </section>
-
-    <!-- OPÇÕES -->
-    <section class="opcoes card">
-      <label class="campo">Agrupar por
-        <select id="grupo">
-          <option value="estado" selected>Estado</option>
-          <option value="filial">Filial</option>
-          <option value="praca">Praça</option>
-          <option value="supervisor">Supervisor</option>
-          <option value="dtEntrega">Data de entrega</option>
-        </select>
-      </label>
-      <div class="campo">Corte de liberação (opcional)
-        <div class="corte-linha">
-          <input type="datetime-local" id="corte" />
-          <button id="btnCorte1715" class="btn mini">Hoje 17:15</button>
-          <button id="btnSemCorte" class="btn mini ghost">Sem corte</button>
+    <!-- IMPORTAR DADOS -->
+    <details class="importar" id="painelImport">
+      <summary><span class="seta">›</span> 📥 Importar dados</summary>
+      <div class="importar-corpo">
+        <div class="importar-topo">
+          <label class="campo">Data da importação
+            <input type="date" id="dataImport" />
+          </label>
+          <p class="hint">Solte os arquivos LIBERADOS_*.xls e MONTADOS_*.xlsx. O tipo e o estado vêm do nome do arquivo.
+            Importar de novo um arquivo com o mesmo nome, na mesma data, substitui o anterior.</p>
         </div>
-      </div>
-      <div class="opcoes-txt">
-        Com corte, pedidos liberados <b>depois</b> desse momento (DATA + HORA:MINUTO do Whyntor)
-        saem do cálculo e aparecem como "Após corte".
-      </div>
-      <button id="btnComparar" class="btn" disabled>Comparar</button>
-    </section>
 
-    <!-- RESULTADO -->
-    <section id="resultado" hidden>
-      <div class="avisos" id="avisos" hidden></div>
-
-      <div class="kpis">
-        <div class="kpi"><span>Liberados</span><b id="kLib">0</b><small id="kLibSub"></small></div>
-        <div class="kpi ok"><span>Montados</span><b id="kMon">0</b><small id="kMonPct"></small></div>
-        <div class="kpi bad"><span>Não montados</span><b id="kNao">0</b><small id="kNaoPct"></small></div>
-        <div class="kpi warn" id="kpiCorte" hidden><span>Liberados após o corte</span><b id="kApos">0</b><small id="kAposSub"></small></div>
-        <div class="kpi neutro"><span>Montados sem liberação</span><b id="kExtra">0</b><small>no RoadNet, fora do Whyntor</small></div>
-      </div>
-
-      <div class="card">
-        <div class="card-head">
-          <h3>Resumo</h3>
-        </div>
-        <div class="tabela-wrap">
-          <table id="tabGrupo">
-            <thead>
-              <tr>
-                <th id="thGrupo">Estado</th>
-                <th class="num">Liberados</th>
-                <th class="num">Montados</th>
-                <th class="num">Não montados</th>
-                <th class="num col-corte">Após corte</th>
-                <th class="num">Sem liberação</th>
-                <th class="num">Valor não montado</th>
-                <th class="barra-col">% montado</th>
-              </tr>
-            </thead>
-            <tbody></tbody>
-            <tfoot></tfoot>
-          </table>
-        </div>
-      </div>
-
-      <div class="card">
-        <div class="card-head">
-          <h3>Detalhe dos pedidos</h3>
-          <div class="filtros">
-            <select id="filtroEstado"><option value="">Todos os estados</option></select>
-            <select id="filtroStatus">
-              <option value="">Todos os liberados</option>
-              <option value="Não montado" selected>Não montados</option>
-              <option value="Montado">Montados</option>
-              <option value="Após corte">Liberados após o corte</option>
-              <option value="Sem liberação">Montados sem liberação</option>
-            </select>
-            <input type="search" id="busca" placeholder="Buscar pedido, cliente, praça…" />
-            <button id="btnExportar" class="btn">Exportar Excel</button>
+        <div class="drop" id="drop">
+          <input type="file" id="fileInput" accept=".xls,.xlsx,.csv" multiple hidden />
+          <div class="drop-icone">⇪</div>
+          <div>
+            <b>Arraste os arquivos aqui ou clique para escolher</b>
+            <span>Pode soltar os 16 arquivos de uma vez</span>
           </div>
         </div>
-        <div class="contagem" id="contagem"></div>
-        <div class="tabela-wrap alta">
-          <table id="tabDetalhe">
-            <thead></thead>
-            <tbody></tbody>
-          </table>
+
+        <div class="arquivos-grid">
+          <div>
+            <h4>Liberados <small id="dataArqLib"></small></h4>
+            <div id="listaLib" class="lista-arq"></div>
+          </div>
+          <div>
+            <h4>Montados <small id="dataArqMon"></small></h4>
+            <div id="listaMon" class="lista-arq"></div>
+          </div>
+        </div>
+
+        <div class="historico">
+          <h4>Histórico salvo neste navegador</h4>
+          <div id="listaHist" class="chips"></div>
         </div>
       </div>
+    </details>
+
+    <div class="acoes">
+      <button id="btnAtualizar" class="btn-atualizar">🔄 Atualizar Dados</button>
+    </div>
+
+    <!-- FILTROS -->
+    <section class="filtros-wrap">
+      <div class="titulo-sec">🔎 FILTROS</div>
+      <div class="filtros">
+        <label class="campo"><span><i class="ponto"></i> Estado</span>
+          <select id="fEstado"></select>
+        </label>
+        <label class="campo"><span>🏙️ Cidade</span>
+          <select id="fCidade"></select>
+        </label>
+        <label class="campo"><span>📅 Data de Importação</span>
+          <select id="fData"></select>
+        </label>
+        <label class="campo"><span>📄 Posição</span>
+          <select id="fPosicao">
+            <option value="">Todas</option>
+            <option value="L">L — Liberado</option>
+            <option value="M">M — Montado</option>
+          </select>
+        </label>
+      </div>
     </section>
+
+    <!-- VAZIO -->
+    <section id="vazio" class="vazio" hidden>
+      <div class="vazio-icone">📦</div>
+      <h2>Nenhum dado importado ainda</h2>
+      <p>Abra <b>Importar dados</b> e solte os arquivos de liberados e montados.</p>
+    </section>
+
+    <div id="conteudo">
+      <!-- KPIs -->
+      <section class="kpis">
+        <div class="kpi destaque">
+          <div class="kpi-icone">📦</div>
+          <div class="kpi-rotulo">TOTAL DE PEDIDOS</div>
+          <div class="kpi-valor" id="kPedidos">0</div>
+          <div class="kpi-sub" id="kPedidosSub"></div>
+          <svg class="spark" id="sPedidos" viewBox="0 0 90 26" preserveAspectRatio="none"></svg>
+        </div>
+        <div class="kpi">
+          <div class="kpi-icone">💰</div>
+          <div class="kpi-rotulo">VALOR TOTAL</div>
+          <div class="kpi-valor" id="kValor">R$ 0,00</div>
+          <div class="kpi-sub">Somatório do período filtrado</div>
+          <svg class="spark" id="sValor" viewBox="0 0 90 26" preserveAspectRatio="none"></svg>
+        </div>
+        <div class="kpi">
+          <div class="kpi-icone">⚖️</div>
+          <div class="kpi-rotulo">PESO TOTAL</div>
+          <div class="kpi-valor" id="kPeso">0 kg</div>
+          <div class="kpi-sub">Somatório do período filtrado</div>
+          <svg class="spark" id="sPeso" viewBox="0 0 90 26" preserveAspectRatio="none"></svg>
+        </div>
+      </section>
+
+      <!-- ABAS -->
+      <nav class="abas">
+        <button class="aba ativa" data-aba="estados">Por Estados</button>
+        <button class="aba" data-aba="municipio">Por Município</button>
+        <button class="aba" data-aba="detalhes">Detalhes dos Pedidos</button>
+        <button class="aba" data-aba="montados">Montados</button>
+      </nav>
+
+      <!-- POR ESTADOS -->
+      <section class="painel ativo" id="aba-estados">
+        <div class="grid-3">
+          <div class="bloco">
+            <div class="bloco-titulo">📄 Resumo por Estado</div>
+            <div class="tabela-wrap">
+              <table class="tabela" id="tabEstados">
+                <thead><tr><th>ESTADO</th><th>PEDIDOS</th><th>VALOR</th><th>PESO</th></tr></thead>
+                <tbody></tbody>
+                <tfoot></tfoot>
+              </table>
+            </div>
+          </div>
+          <div class="bloco">
+            <div class="bloco-titulo">📈 Valor por Estado</div>
+            <div id="barrasEstado" class="barras"></div>
+          </div>
+          <div class="bloco">
+            <div class="bloco-titulo">🗺️ Distribuição por Estado</div>
+            <div id="mapa" class="mapa"></div>
+            <p class="nota">Clique em um estado do mapa para ver somente os dados dele. Estados sem dados aparecem escurecidos.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- POR MUNICÍPIO -->
+      <section class="painel" id="aba-municipio">
+        <div class="grid-2">
+          <div class="bloco">
+            <div class="bloco-cab">
+              <div class="bloco-titulo">🏙️ Resumo por Município</div>
+              <input type="search" id="buscaMun" placeholder="Buscar cidade…" />
+            </div>
+            <div class="tabela-wrap alta">
+              <table class="tabela" id="tabMun">
+                <thead><tr><th>CIDADE</th><th>ESTADO</th><th>PEDIDOS</th><th>VALOR</th><th>PESO</th><th>% MONTADO</th></tr></thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </div>
+          <div class="bloco">
+            <div class="bloco-titulo">📈 Top 15 municípios por valor</div>
+            <div id="barrasMun" class="barras"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- DETALHES -->
+      <section class="painel" id="aba-detalhes">
+        <div class="bloco">
+          <div class="bloco-cab">
+            <div class="bloco-titulo">🧾 Detalhes dos Pedidos</div>
+            <div class="ferramentas">
+              <select id="fSituacao">
+                <option value="">Todos os liberados</option>
+                <option value="Montado">Montados</option>
+                <option value="Ficou para trás">Ficaram para trás</option>
+                <option value="Sem liberação">Montados sem liberação</option>
+              </select>
+              <input type="search" id="buscaDet" placeholder="Buscar pedido, cliente, praça…" />
+              <button id="btnExportar" class="btn">⬇ Exportar Excel</button>
+            </div>
+          </div>
+          <div class="contagem" id="contagemDet"></div>
+          <div class="tabela-wrap alta">
+            <table class="tabela" id="tabDet"><thead></thead><tbody></tbody></table>
+          </div>
+        </div>
+      </section>
+
+      <!-- MONTADOS -->
+      <section class="painel" id="aba-montados">
+        <div class="bloco">
+          <div class="bloco-cab">
+            <div class="bloco-titulo"><i class="ponto"></i> Montados x Liberados por Estado</div>
+            <div class="ferramentas">
+              <label class="campo-inline">Corte de liberação
+                <input type="datetime-local" id="corte" />
+              </label>
+              <button id="btnCorte" class="btn ghost">17:15 do dia</button>
+              <button id="btnSemCorte" class="btn ghost">Sem corte</button>
+            </div>
+          </div>
+          <div class="tabela-wrap">
+            <table class="tabela tabela-mxl" id="tabMxL">
+              <thead>
+                <tr class="grupos">
+                  <th rowspan="2" class="col-estado">ESTADO</th>
+                  <th colspan="4" class="g-mon">MONTADOS</th>
+                  <th colspan="3" class="g-lib">LIBERADOS</th>
+                  <th colspan="3" class="g-tras">FICARAM PARA TRÁS</th>
+                  <th rowspan="2" class="g-pct">% MONTADO</th>
+                </tr>
+                <tr>
+                  <th class="g-mon">PEDIDOS</th><th class="g-mon">VALOR</th><th class="g-mon">PESO</th><th class="g-mon">VEÍCULOS</th>
+                  <th class="g-lib">PEDIDOS</th><th class="g-lib">VALOR</th><th class="g-lib">PESO</th>
+                  <th class="g-tras">PEDIDOS</th><th class="g-tras">VALOR</th><th class="g-tras">PESO</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+              <tfoot></tfoot>
+            </table>
+          </div>
+          <div class="nota" id="notaMxL"></div>
+        </div>
+      </section>
+    </div>
   </main>
 
   <div id="toast" class="toast" hidden></div>
