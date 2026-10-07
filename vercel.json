@@ -1,14 +1,31 @@
 {
   "functions": {
-    "api/dados.js": { "includeFiles": "data/**" }
+    "api/dados.js": {
+      "includeFiles": "data/**"
+    },
+    "api/preparar.js": {
+      "maxDuration": 30
+    },
+    "api/publicar.js": {
+      "maxDuration": 30
+    },
+    "api/arquivos.js": {
+      "maxDuration": 30
+    }
   },
   "ignoreCommand": "git diff --quiet HEAD^ HEAD -- . ':(exclude)dados'",
   "headers": [
     {
       "source": "/(.*)",
       "headers": [
-        { "key": "X-Content-Type-Options", "value": "nosniff" },
-        { "key": "Referrer-Policy", "value": "no-referrer" }
+        {
+          "key": "X-Content-Type-Options",
+          "value": "nosniff"
+        },
+        {
+          "key": "Referrer-Policy",
+          "value": "no-referrer"
+        }
       ]
     }
   ]
