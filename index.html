@@ -13,79 +13,98 @@
   <header class="topo">
     <div>
       <h1>Liberados <span>x</span> Montados</h1>
-      <p>Importe as bases de pedidos e veja quantos liberados foram montados.</p>
+      <p>Quantos pedidos liberados (Whyntor) já foram montados no RoadNet, por estado.</p>
     </div>
     <button id="btnLimpar" class="btn ghost">Limpar tudo</button>
   </header>
 
   <main>
     <!-- IMPORTAÇÃO -->
+    <section class="drop todos" id="dropTodos">
+      <input type="file" id="fileTodos" accept=".xls,.xlsx,.csv" multiple hidden />
+      <div class="todos-icone">⇪</div>
+      <div>
+        <h2>Arraste aqui todos os arquivos de uma vez</h2>
+        <p class="hint">LIBERADOS_*.xls e MONTADOS_*.xlsx — o site separa liberados/montados e o estado pelo nome do arquivo.
+          MONTADOS_BA e MONTADOS_BA_SF entram juntos em BA.</p>
+      </div>
+    </section>
+
     <section class="uploads">
-      <div class="drop" id="dropLib" data-tipo="lib">
+      <div class="drop" id="dropLib">
         <div class="drop-tag lib">L</div>
-        <h2>Pedidos liberados</h2>
-        <p class="hint">Arraste aqui ou clique (.xls, .xlsx, .csv) — pode enviar vários arquivos</p>
+        <h2>Liberados</h2>
+        <p class="hint">Whyntor · coluna NUMPED</p>
         <input type="file" id="fileLib" accept=".xls,.xlsx,.csv" multiple hidden />
         <div class="info" id="infoLib">Nenhum arquivo</div>
-        <label class="campo">Coluna do pedido
-          <select id="keyLib" disabled></select>
-        </label>
       </div>
 
-      <div class="drop" id="dropMon" data-tipo="mon">
+      <div class="drop" id="dropMon">
         <div class="drop-tag mon">M</div>
-        <h2>Pedidos montados</h2>
-        <p class="hint">Arraste aqui ou clique (.xls, .xlsx, .csv) — pode enviar vários arquivos</p>
+        <h2>Montados</h2>
+        <p class="hint">RoadNet · coluna Número do pedido</p>
         <input type="file" id="fileMon" accept=".xls,.xlsx,.csv" multiple hidden />
         <div class="info" id="infoMon">Nenhum arquivo</div>
-        <label class="campo">Coluna do pedido
-          <select id="keyMon" disabled></select>
-        </label>
       </div>
     </section>
 
     <!-- OPÇÕES -->
     <section class="opcoes card">
       <label class="campo">Agrupar por
-        <select id="grupo" disabled></select>
+        <select id="grupo">
+          <option value="estado" selected>Estado</option>
+          <option value="filial">Filial</option>
+          <option value="praca">Praça</option>
+          <option value="supervisor">Supervisor</option>
+          <option value="dtEntrega">Data de entrega</option>
+        </select>
       </label>
-      <label class="campo">Horário de corte (opcional)
-        <input type="time" id="corte" />
-      </label>
+      <div class="campo">Corte de liberação (opcional)
+        <div class="corte-linha">
+          <input type="datetime-local" id="corte" />
+          <button id="btnCorte1715" class="btn mini">Hoje 17:15</button>
+          <button id="btnSemCorte" class="btn mini ghost">Sem corte</button>
+        </div>
+      </div>
       <div class="opcoes-txt">
-        Com horário de corte, pedidos montados <b>depois</b> do horário aparecem como
-        "Montado após corte" (usa as colunas HORA/MINUTO da base de montados).
+        Com corte, pedidos liberados <b>depois</b> desse momento (DATA + HORA:MINUTO do Whyntor)
+        saem do cálculo e aparecem como "Após corte".
       </div>
       <button id="btnComparar" class="btn" disabled>Comparar</button>
     </section>
 
     <!-- RESULTADO -->
     <section id="resultado" hidden>
+      <div class="avisos" id="avisos" hidden></div>
+
       <div class="kpis">
-        <div class="kpi"><span>Liberados</span><b id="kLib">0</b></div>
+        <div class="kpi"><span>Liberados</span><b id="kLib">0</b><small id="kLibSub"></small></div>
         <div class="kpi ok"><span>Montados</span><b id="kMon">0</b><small id="kMonPct"></small></div>
-        <div class="kpi warn" id="kpiCorte" hidden><span>Montados após corte</span><b id="kApos">0</b><small id="kAposPct"></small></div>
         <div class="kpi bad"><span>Não montados</span><b id="kNao">0</b><small id="kNaoPct"></small></div>
-        <div class="kpi neutro"><span>Montados sem liberação</span><b id="kExtra">0</b><small>na base M, fora da base L</small></div>
+        <div class="kpi warn" id="kpiCorte" hidden><span>Liberados após o corte</span><b id="kApos">0</b><small id="kAposSub"></small></div>
+        <div class="kpi neutro"><span>Montados sem liberação</span><b id="kExtra">0</b><small>no RoadNet, fora do Whyntor</small></div>
       </div>
 
       <div class="card">
         <div class="card-head">
-          <h3>Montagem por <span id="tituloGrupo"></span></h3>
+          <h3>Resumo</h3>
         </div>
         <div class="tabela-wrap">
           <table id="tabGrupo">
             <thead>
               <tr>
-                <th id="thGrupo">Grupo</th>
+                <th id="thGrupo">Estado</th>
                 <th class="num">Liberados</th>
                 <th class="num">Montados</th>
-                <th class="num col-corte">Após corte</th>
                 <th class="num">Não montados</th>
+                <th class="num col-corte">Após corte</th>
+                <th class="num">Sem liberação</th>
+                <th class="num">Valor não montado</th>
                 <th class="barra-col">% montado</th>
               </tr>
             </thead>
             <tbody></tbody>
+            <tfoot></tfoot>
           </table>
         </div>
       </div>
@@ -94,14 +113,15 @@
         <div class="card-head">
           <h3>Detalhe dos pedidos</h3>
           <div class="filtros">
+            <select id="filtroEstado"><option value="">Todos os estados</option></select>
             <select id="filtroStatus">
               <option value="">Todos os liberados</option>
               <option value="Não montado" selected>Não montados</option>
               <option value="Montado">Montados</option>
-              <option value="Montado após corte">Montados após corte</option>
+              <option value="Após corte">Liberados após o corte</option>
               <option value="Sem liberação">Montados sem liberação</option>
             </select>
-            <input type="search" id="busca" placeholder="Buscar pedido, cliente…" />
+            <input type="search" id="busca" placeholder="Buscar pedido, cliente, praça…" />
             <button id="btnExportar" class="btn">Exportar Excel</button>
           </div>
         </div>
