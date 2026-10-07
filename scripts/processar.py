@@ -4,11 +4,12 @@ Le todos os arquivos da pasta dados/ (LIBERADOS_*, MONTADOS_*, cargas por estado
 e gera um JSON por estado em data/ (data/estado_SP.json etc.) + data/meta.json.
 
 Sem historico: cada execucao reconstroi tudo a partir do que esta em dados/ agora.
-Para atualizar, basta substituir os arquivos em dados/ (pelo site do GitHub).
+Para atualizar: pagina "Atualizar dados" do proprio site (ou substituir os arquivos em dados/ no GitHub).
 
 Uso:  python scripts/processar.py
 """
 import gzip
+import io
 import json
 import os
 import sys
@@ -24,6 +25,8 @@ RAIZ = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PASTA_DADOS = os.path.join(RAIZ, "dados")
 PASTA_SAIDA = os.path.join(RAIZ, "data")
 EXTENSOES = (".xls", ".xlsx", ".csv")
+EXTENSOES_GZ = tuple(e + ".gz" for e in EXTENSOES)  # a pagina "Atualizar dados" envia .xls/.csv compactados
+TAGS_TIPO = ("LIBERADOS", "MONTADOS", "CARGAS")
 
 # Colunas que seguem para o site (o resto e descartado para manter o JSON leve)
 COLS_SAIDA = {
@@ -37,6 +40,32 @@ COLS_SAIDA = {
                "STATUS_ROTA", "DATA", "SUBFROTA"],
 }
 COLS_DATA = {"DATA", "DTENTREGA"}
+
+
+def separar_nome(nome):
+    """'LIBERADOS__LIBERADOS_SP.xls.gz' -> ('LIBERADOS', 'LIBERADOS_SP.xls', True).
+    O prefixo TIPO__ (colocado pela pagina Atualizar dados ou pelo sincronizador) diz o tipo do
+    arquivo; o resto do nome continua sendo usado para achar estado e subfrota."""
+    compactado = nome.lower().endswith(".gz")
+    base = nome[:-3] if compactado else nome
+    tag = None
+    if "__" in base:
+        prefixo, resto = base.split("__", 1)
+        if prefixo.upper() in TAGS_TIPO and resto:
+            tag, base = prefixo.upper(), resto
+    return tag, base, compactado
+
+
+def abrir_arquivo(caminho, nome_base, compactado):
+    """Abre o arquivo em memoria (descompactando se for .gz) com .name = nome sem o .gz,
+    que e o que o leitor usa para escolher o formato (.xls/.xlsx/.csv)."""
+    with open(caminho, "rb") as arq:
+        dados = arq.read()
+    if compactado:
+        dados = gzip.decompress(dados)
+    mem = io.BytesIO(dados)
+    mem.name = nome_base
+    return mem
 
 
 def serializar(df, tipo):
@@ -63,7 +92,7 @@ def main():
 
     arquivos = sorted(
         f for f in os.listdir(PASTA_DADOS)
-        if f.lower().endswith(EXTENSOES) and not f.startswith(("~", "."))
+        if f.lower().endswith(EXTENSOES + EXTENSOES_GZ) and not f.startswith(("~", "."))
     )
     agrupados = {}  # (estado, tipo) -> [dfs]
     resumo_arquivos, erros = [], []
@@ -71,24 +100,26 @@ def main():
     for nome in arquivos:
         caminho = os.path.join(PASTA_DADOS, nome)
         try:
-            estado = core.detectar_estado_pelo_nome(nome)
+            tag, base, compactado = separar_nome(nome)
+            estado = core.detectar_estado_pelo_nome(base)
             if estado is None:
                 erros.append(f"{nome}: nao foi possivel identificar o estado pelo nome.")
                 continue
-            with open(caminho, "rb") as arq:
-                df_bruto = core.ler_arquivo_upload(arq)
-            tipo = (core.detectar_tipo_pelo_nome(nome, estado)
+            df_bruto = core.ler_arquivo_upload(abrir_arquivo(caminho, base, compactado))
+            # O prefixo do arquivo (quando existe) manda; sem ele, vale o nome / as colunas.
+            tipo = (tag
+                    or core.detectar_tipo_pelo_nome(base, estado)
                     or core.detectar_tipo_pelo_conteudo(df_bruto.columns)
                     or "LIBERADOS")
 
             if tipo == "MONTADOS":
-                sub = core.detectar_subfrota_pelo_nome(nome, estado, core.SUBFROTAS_MONTADOS_POR_ESTADO)
+                sub = core.detectar_subfrota_pelo_nome(base, estado, core.SUBFROTAS_MONTADOS_POR_ESTADO)
                 df = core.tratar_dataframe_montados(df_bruto, subfrota=sub)
             elif tipo == "CARGAS":
-                sub = core.detectar_subfrota_pelo_nome(nome, estado)
+                sub = core.detectar_subfrota_pelo_nome(base, estado)
                 df = core.tratar_dataframe_cargas(df_bruto, subfrota=sub)
             else:
-                sub = core.detectar_subfrota_pelo_nome(nome, estado, core.SUBFROTAS_LIBERADOS_POR_ESTADO)
+                sub = core.detectar_subfrota_pelo_nome(base, estado, core.SUBFROTAS_LIBERADOS_POR_ESTADO)
                 df = core.tratar_dataframe(df_bruto, subfrota=sub)
                 if estado == "MG_ES":
                     df = core.redefinir_subfrota_mg_es_pela_praca(df)
