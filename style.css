@@ -25,7 +25,10 @@ body {
   min-height: 100vh;
 }
 
-main { max-width: 1900px; margin: 0 auto; padding: 12px 24px 48px; display: grid; gap: 14px; }
+main { max-width: 1900px; margin: 0 auto; padding: 12px 24px 48px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; }
+main > *, #conteudo > * { min-width: 0; }
+#conteudo { display: grid; gap: 14px; grid-template-columns: minmax(0, 1fr); }
+#conteudo[hidden] { display: none; }
 
 button, input, select { font: inherit; }
 
@@ -45,8 +48,8 @@ button, input, select { font: inherit; }
   user-select: none;
 }
 .importar summary::-webkit-details-marker { display: none; }
-.importar .seta { color: var(--txt); font-size: 16px; transition: transform .2s; display: inline-block; width: 10px; }
-.importar[open] .seta { transform: rotate(90deg); }
+.importar .seta { width: 6px; height: 6px; border-right: 1.5px solid var(--txt); border-bottom: 1.5px solid var(--txt); transform: rotate(-45deg); transition: transform .2s; display: inline-block; margin: 0 4px; }
+.importar[open] .seta { transform: rotate(45deg); }
 .importar-corpo { padding: 4px 16px 18px; display: grid; gap: 16px; border-top: 1px solid var(--borda); padding-top: 16px; }
 .importar-topo { display: flex; gap: 20px; align-items: flex-end; flex-wrap: wrap; }
 .importar-topo .hint { flex: 1; min-width: 260px; color: var(--sub); font-size: 12px; line-height: 1.5; }
@@ -83,6 +86,7 @@ button, input, select { font: inherit; }
 }
 .arq .nome { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--sub); }
 .arq b { font-variant-numeric: tabular-nums; }
+.arq b small.de { color: var(--sub); font-weight: 500; }
 .x { background: none; border: none; color: var(--sub); cursor: pointer; font-size: 16px; line-height: 1; padding: 0 4px; }
 .x:hover { color: var(--vermelho); }
 

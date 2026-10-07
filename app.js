@@ -7,13 +7,40 @@
 /* ---------- Configuração ---------- */
 
 // Como cada arquivo vira um "estado" do painel (pelo nome do arquivo)
-//   LIBERADOS_ES + LIBERADOS_MG  -> MG_ES (o arquivo do ES também traz praças de MG)
-//   MONTADOS_BA_SF               -> BA
-//   SP_WFS                       -> SPW
-const GRUPO_ESTADO = { MG: "MG_ES", ES: "MG_ES", SP_WFS: "SPW", BA_SF: "BA", D_F: "DF" };
+//   MONTADOS_BA_SF -> BA
+//   SP_WFS         -> SPW
+const GRUPO_ESTADO = { SP_WFS: "SPW", BA_SF: "BA", D_F: "DF" };
+
+// Separação MG x ES nos LIBERADOS pela CIDADE (o Whyntor mistura os dois estados):
+//   LIBERADOS_ES -> só pedidos de cidades do Espírito Santo
+//   LIBERADOS_MG -> tira os pedidos de cidades do Espírito Santo
+const FILTRO_CIDADE_LIB = {
+  ES: "incluirES",
+  MG: "excluirES",
+};
+
+// Os 78 municípios do Espírito Santo (sem acento, maiúsculas)
+const CIDADES_ES = new Set([
+  "AFONSO CLAUDIO", "AGUA DOCE DO NORTE", "AGUIA BRANCA", "ALEGRE", "ALFREDO CHAVES", "ALTO RIO NOVO",
+  "ANCHIETA", "APIACA", "ARACRUZ", "ATILIO VIVACQUA", "BAIXO GUANDU", "BARRA DE SAO FRANCISCO",
+  "BOA ESPERANCA", "BOM JESUS DO NORTE", "BREJETUBA", "CACHOEIRO DE ITAPEMIRIM", "CARIACICA", "CASTELO",
+  "COLATINA", "CONCEICAO DA BARRA", "CONCEICAO DO CASTELO", "DIVINO DE SAO LOURENCO", "DOMINGOS MARTINS",
+  "DORES DO RIO PRETO", "ECOPORANGA", "FUNDAO", "GOVERNADOR LINDENBERG", "GUACUI", "GUARAPARI", "IBATIBA",
+  "IBIRACU", "IBITIRAMA", "ICONHA", "IRUPI", "ITAGUACU", "ITAPEMIRIM", "ITARANA", "IUNA", "JAGUARE",
+  "JERONIMO MONTEIRO", "JOAO NEIVA", "LARANJA DA TERRA", "LINHARES", "MANTENOPOLIS", "MARATAIZES",
+  "MARECHAL FLORIANO", "MARILANDIA", "MIMOSO DO SUL", "MONTANHA", "MUCURICI", "MUNIZ FREIRE", "MUQUI",
+  "NOVA VENECIA", "PANCAS", "PEDRO CANARIO", "PINHEIROS", "PIUMA", "PONTO BELO", "PRESIDENTE KENNEDY",
+  "RIO BANANAL", "RIO NOVO DO SUL", "SANTA LEOPOLDINA", "SANTA MARIA DE JETIBA", "SANTA TERESA",
+  "SAO DOMINGOS DO NORTE", "SAO GABRIEL DA PALHA", "SAO JOSE DO CALCADO", "SAO MATEUS", "SAO ROQUE DO CANAA",
+  "SERRA", "SOORETAMA", "VARGEM ALTA", "VENDA NOVA DO IMIGRANTE", "VIANA", "VILA PAVAO", "VILA VALERIO",
+  "VILA VELHA", "VITORIA",
+]);
+
+// Nomes que existem em MG e no ES: decide pela longitude (o ES fica a leste de -42°)
+const CIDADES_AMBIGUAS = new Set(["BOA ESPERANCA"]);
 
 // Em quais estados do mapa cada grupo aparece
-const MAPA_UF = { MG_ES: ["mg", "es"], SPW: ["sp"], SP: ["sp"], AM: ["am"], BA: ["ba"], DF: ["df"], MT: ["mt"] };
+const MAPA_UF = { MG: ["mg"], ES: ["es"], SPW: ["sp"], SP: ["sp"], AM: ["am"], BA: ["ba"], DF: ["df"], MT: ["mt"] };
 
 /* ---------- Utilidades ---------- */
 
@@ -75,6 +102,21 @@ function estadoDoArquivo(nome) {
   return GRUPO_ESTADO[s] || s || "GERAL";
 }
 
+// O pedido é de uma cidade do Espírito Santo?
+function cidadeES(r) {
+  if (!CIDADES_ES.has(r.cid)) return false;
+  if (CIDADES_AMBIGUAS.has(r.cid)) return typeof r.lon === "number" && r.lon > -42;
+  return true;
+}
+
+// O pedido liberado entra na conta deste estado?
+function entraNoEstado(r, estado) {
+  const regra = FILTRO_CIDADE_LIB[estado];
+  if (regra === "incluirES") return cidadeES(r);
+  if (regra === "excluirES") return !cidadeES(r);
+  return true;
+}
+
 /* ---------- Leitura e enxugamento das planilhas ---------- */
 
 function lerPlanilha(file) {
@@ -116,6 +158,7 @@ function enxugarLiberado(l) {
     w: numeroBR(l["PESOBRUTOTOT"]),
     ent: dataISO(l["DTENTREGA"]),
     lib: libEm,
+    lon: l["LONGITUDE"] === "" || l["LONGITUDE"] === undefined || isNaN(numeroBR(l["LONGITUDE"])) ? null : numeroBR(l["LONGITUDE"]),
   };
 }
 
@@ -184,6 +227,7 @@ let LIB = [];            // liberados processados (todas as datas)
 let MON = [];            // montados processados (todas as datas)
 let abaAtual = "estados";
 let ordemDet = { col: null, asc: true };
+let dataPreferida = null; // data a selecionar no filtro depois de uma importação
 
 /* ---------- Processamento ---------- */
 
@@ -191,11 +235,13 @@ function processar() {
   LIB = []; MON = [];
   SNAPS.forEach((snap) => {
     const lib = new Map(), mon = new Map();
-    Object.values(snap.arquivos).forEach((a) => {
+    Object.entries(snap.arquivos).forEach(([nome, a]) => {
+      const estado = estadoDoArquivo(nome); // recalcula: vale também para o histórico já salvo
       const alvo = a.tipo === "lib" ? lib : mon;
       a.linhas.forEach((r) => {
-        const id = a.estado + "|" + r.p;
-        if (!alvo.has(id)) alvo.set(id, { ...r, uf: a.estado, data: snap.data });
+        if (a.tipo === "lib" && !entraNoEstado(r, estado)) return;
+        const id = estado + "|" + r.p;
+        if (!alvo.has(id)) alvo.set(id, { ...r, uf: estado, data: snap.data });
       });
     });
     lib.forEach((r, id) => {
@@ -233,7 +279,10 @@ function preencherFiltros() {
 
   const selD = $("fData"), atualD = selD.value;
   selD.innerHTML = `<option value="">Todo o histórico</option>` + datas.map((d) => `<option value="${d}">${dataBR(d)}</option>`).join("");
-  selD.value = datas.includes(atualD) ? atualD : (atualD === "" && selD.dataset.tocado ? "" : datas[0] || "");
+  if (dataPreferida && datas.includes(dataPreferida)) selD.value = dataPreferida;
+  else if (datas.includes(atualD)) selD.value = atualD;
+  else selD.value = atualD === "" && selD.dataset.tocado ? "" : datas[0] || "";
+  dataPreferida = null;
 
   const selE = $("fEstado"), atualE = selE.value;
   selE.innerHTML = `<option value="">Todos os estados</option>` + ufs.map((u) => `<option>${u}</option>`).join("");
@@ -314,8 +363,9 @@ function agrupar(lista, campo) {
   const m = new Map();
   lista.forEach((r) => {
     const k = r[campo] || "(vazio)";
-    if (!m.has(k)) m.set(k, { k, n: 0, v: 0, w: 0, mon: 0, uf: r.uf });
-    const g = m.get(k); g.n++; g.v += r.v; g.w += r.w; if (r.montado) g.mon++;
+    const id = campo === "uf" ? k : r.uf + "|" + k; // mesma cidade em estados diferentes não se mistura
+    if (!m.has(id)) m.set(id, { k, n: 0, v: 0, w: 0, mon: 0, uf: r.uf });
+    const g = m.get(id); g.n++; g.v += r.v; g.w += r.w; if (r.montado) g.mon++;
   });
   return [...m.values()];
 }
@@ -399,7 +449,7 @@ function renderMunicipios(d) {
       <td class="num">${pill(p)}</td>
     </tr>`;
   }).join("") || `<tr><td colspan="6" class="nota">Sem dados para os filtros.</td></tr>`;
-  barras($("barrasMun"), grupos.slice(0, 15).reverse().map((g) => ({ rot: g.k, val: g.v })), fmtR);
+  barras($("barrasMun"), grupos.slice(0, 15).reverse().map((g) => ({ rot: `${g.k} · ${g.uf}`, val: g.v })), fmtR);
   $("barrasMun").classList.add("mun");
 }
 
@@ -520,10 +570,16 @@ function renderImport() {
   const snap = SNAPS.get(data);
   const arqs = snap ? Object.entries(snap.arquivos) : [];
   const lista = (tipo) => {
-    const itens = arqs.filter(([, a]) => a.tipo === tipo).sort((a, b) => a[1].estado.localeCompare(b[1].estado));
-    return itens.length ? itens.map(([nome, a]) =>
-      `<div class="arq"><span class="uf">${esc(a.estado)}</span><span class="nome">${esc(nome)}</span><b>${fmtN(a.linhas.length)}</b>` +
-      `<button class="x" data-nome="${encodeURIComponent(nome)}" title="Remover arquivo">×</button></div>`).join("")
+    const itens = arqs.filter(([, a]) => a.tipo === tipo)
+      .map(([nome, a]) => [nome, a, estadoDoArquivo(nome)])
+      .sort((a, b) => a[2].localeCompare(b[2]));
+    return itens.length ? itens.map(([nome, a, estado]) => {
+      const usados = tipo === "lib" ? a.linhas.filter((r) => entraNoEstado(r, estado)).length : a.linhas.length;
+      const qtd = usados === a.linhas.length ? fmtN(usados)
+        : `<span title="Pedidos considerados após o filtro de cidade">${fmtN(usados)} <small class="de">de ${fmtN(a.linhas.length)}</small></span>`;
+      return `<div class="arq"><span class="uf">${esc(estado)}</span><span class="nome">${esc(nome)}</span><b>${qtd}</b>` +
+      `<button class="x" data-nome="${encodeURIComponent(nome)}" title="Remover arquivo">×</button></div>`;
+    }).join("")
       : `<div class="vazio-lista">Nenhum arquivo nesta data</div>`;
   };
   $("listaLib").innerHTML = lista("lib");
@@ -583,7 +639,7 @@ async function importar(files) {
   if (ok) {
     SNAPS.set(data, snap);
     try { await DB.salvar(snap); } catch (e) { console.error(e); erros.push("não consegui salvar no histórico do navegador"); }
-    $("fData").value = data;
+    dataPreferida = data;
   }
   atualizarTudo(data);
   if (erros.length) toast("Problema em: " + erros.join(", "), true);
