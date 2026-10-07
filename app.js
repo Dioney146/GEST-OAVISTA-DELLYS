@@ -1,20 +1,57 @@
 /* =========================================================
-   Liberados x Montados — comparação de pedidos
+   Liberados x Montados — comparação de pedidos por estado
    Tudo roda no navegador (nenhum dado sai do computador).
+
+   Arquivos esperados (o estado vem do nome do arquivo):
+     LIBERADOS_AM.xls  ...  MONTADOS_AM.xlsx
+     LIBERADO_DF.xls   ...  MONTADOS_D.F.xlsx
+     LIBERADOS_BA.xls  ...  MONTADOS_BA.xlsx + MONTADOS_BA_SF.xlsx
+     LIBERADOS_SP_WFS  ...  MONTADOS_SP_WFS
    ========================================================= */
 
-const base = {
-  lib: { arquivos: [], linhas: [], colunas: [] },
-  mon: { arquivos: [], linhas: [], colunas: [] },
-};
+/* ---------- Configuração ---------- */
 
-let resultado = null;      // { detalhe: [], extras: [], grupos: [], usouCorte: bool }
-let ordemDetalhe = { col: null, asc: true };
+// Coluna do número do pedido em cada base (cabeçalhos em maiúsculas)
+const CHAVE_LIB = ["NUMPED", "PEDIDO", "NUM_PEDIDO"];
+const CHAVE_MON = ["NÚMERO DO PEDIDO", "NUMERO DO PEDIDO", "NUMPED", "PEDIDO"];
+
+// Liberados que vêm misturados com outro estado: só entram pedidos
+// cuja PRACA começa com o prefixo indicado (ex.: o LIBERADOS_ES traz praças de MG).
+const FILTRO_PRACA = { ES: ["ES"] };
+
+// Arquivos de montados que pertencem a outro estado
+const APELIDOS_ESTADO = { BA_SF: "BA", D_F: "DF", DF: "DF" };
+
+/* ---------- Estado da aplicação ---------- */
+
+const arquivos = { lib: new Map(), mon: new Map() }; // nome -> { estado, linhas }
+let resultado = null;
+let ordem = { col: null, asc: true };
 
 const $ = (id) => document.getElementById(id);
 const fmt = (n) => Number(n || 0).toLocaleString("pt-BR");
 const pct = (a, b) => (b ? (a / b) * 100 : 0);
 const fmtPct = (v) => v.toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 }) + "%";
+const fmtMoeda = (v) => (v === "" || v === null || isNaN(v) ? "" : Number(v).toLocaleString("pt-BR", { style: "currency", currency: "BRL" }));
+
+/* ---------- Nome do arquivo -> tipo e estado ---------- */
+
+function tipoDoArquivo(nome) {
+  const n = nome.toUpperCase();
+  if (/LIBERAD/.test(n)) return "lib";
+  if (/MONTAD/.test(n)) return "mon";
+  return null;
+}
+
+function estadoDoArquivo(nome) {
+  let s = nome.toUpperCase().replace(/\.(XLSX?|XLSM|CSV)$/, "");
+  s = s.replace(/^.*?(LIBERADOS?|MONTADOS?)[\s_-]*/, "");
+  s = s.replace(/[()]/g, " ").replace(/\./g, "_").trim().replace(/[\s_-]+/g, "_");
+  if (APELIDOS_ESTADO[s]) return APELIDOS_ESTADO[s];
+  s = s.replace(/_SF$/, ""); // MONTADOS_BA_SF -> BA
+  s = s.replace(/^D_F$/, "DF");
+  return s || "GERAL";
+}
 
 /* ---------- Leitura dos arquivos ---------- */
 
@@ -26,10 +63,8 @@ function lerArquivo(file) {
         const wb = XLSX.read(new Uint8Array(e.target.result), { type: "array", cellDates: true });
         let linhas = [];
         wb.SheetNames.forEach((nome) => {
-          const dados = XLSX.utils.sheet_to_json(wb.Sheets[nome], { defval: "", raw: true });
-          linhas = linhas.concat(dados);
+          linhas = linhas.concat(XLSX.utils.sheet_to_json(wb.Sheets[nome], { defval: "", raw: true }));
         });
-        // Normaliza cabeçalhos: sem espaços extras e em maiúsculas
         linhas = linhas.map((l) => {
           const o = {};
           for (const k in l) o[String(k).trim().toUpperCase()] = l[k];
@@ -45,328 +80,380 @@ function lerArquivo(file) {
   });
 }
 
-async function carregar(tipo, files) {
+async function carregar(files, tipoPadrao) {
   if (!files || !files.length) return;
-  const alvo = base[tipo];
-  try {
-    for (const f of files) {
+  let ok = 0, erros = [];
+  for (const f of files) {
+    const tipo = tipoDoArquivo(f.name) || tipoPadrao;
+    if (!tipo) { erros.push(`${f.name} (não sei se é liberado ou montado)`); continue; }
+    try {
       const linhas = await lerArquivo(f);
-      alvo.arquivos.push({ nome: f.name, qtd: linhas.length });
-      alvo.linhas = alvo.linhas.concat(linhas);
+      arquivos[tipo].set(f.name, { estado: estadoDoArquivo(f.name), linhas });
+      ok++;
+    } catch (err) {
+      console.error(err);
+      erros.push(f.name);
     }
-    const cols = new Set();
-    alvo.linhas.slice(0, 500).forEach((l) => Object.keys(l).forEach((k) => cols.add(k)));
-    alvo.colunas = [...cols].filter((c) => !c.startsWith("__EMPTY"));
-    atualizarPainel(tipo);
-    atualizarOpcoes();
-    toast(`${files.length} arquivo(s) carregado(s)`);
-  } catch (err) {
-    console.error(err);
-    toast("Não consegui ler o arquivo. Confira se é .xls, .xlsx ou .csv.", true);
   }
+  atualizarPaineis();
+  if (erros.length) toast("Não consegui ler: " + erros.join(", "), true);
+  else toast(`${ok} arquivo(s) carregado(s)`);
+  if (resultado) comparar();
 }
 
-/* ---------- Detecção de colunas ---------- */
+/* ---------- Painéis de importação ---------- */
 
-function sugerirChave(cols) {
-  const prefer = ["NUMPED", "PEDIDO", "NUM_PEDIDO", "NR_PEDIDO", "NUMERO PEDIDO", "NÚMERO PEDIDO", "ORDER"];
-  for (const p of prefer) if (cols.includes(p)) return p;
-  return cols.find((c) => c.includes("PED")) || cols[0] || "";
+function atualizarPaineis() {
+  ["lib", "mon"].forEach((tipo) => {
+    const suf = tipo === "lib" ? "Lib" : "Mon";
+    const lista = [...arquivos[tipo].entries()].sort((a, b) => a[1].estado.localeCompare(b[1].estado));
+    $("drop" + suf).classList.toggle("carregado", lista.length > 0);
+    $("info" + suf).innerHTML = lista.length
+      ? lista.map(([nome, a]) =>
+          `<div class="arq"><span class="uf">${a.estado}</span><span class="nome">${nome}</span>` +
+          `<b>${fmt(a.linhas.length)}</b><button class="x" data-tipo="${tipo}" data-nome="${encodeURIComponent(nome)}" title="Remover">×</button></div>`
+        ).join("")
+      : "Nenhum arquivo";
+  });
+  document.querySelectorAll(".arq .x").forEach((b) => (b.onclick = (e) => {
+    e.stopPropagation();
+    arquivos[b.dataset.tipo].delete(decodeURIComponent(b.dataset.nome));
+    atualizarPaineis();
+    if (resultado) arquivos.lib.size && arquivos.mon.size ? comparar() : esconderResultado();
+  }));
+  $("btnComparar").disabled = !(arquivos.lib.size && arquivos.mon.size);
 }
 
-function sugerirGrupo(cols) {
-  const prefer = ["CODFILIAL", "FILIAL", "ESTADO", "UF", "PRACA", "PRAÇA", "NOMESUP", "DESTINO"];
-  for (const p of prefer) if (cols.includes(p)) return p;
-  return "";
-}
+/* ---------- Utilidades ---------- */
 
-function preencherSelect(sel, opcoes, valor, vazio) {
-  sel.innerHTML = "";
-  if (vazio) sel.add(new Option(vazio, ""));
-  opcoes.forEach((c) => sel.add(new Option(c, c)));
-  sel.value = valor;
-  sel.disabled = !opcoes.length;
+function acharColuna(linha, opcoes) {
+  return opcoes.find((c) => c in linha) || null;
 }
-
-function atualizarPainel(tipo) {
-  const alvo = base[tipo];
-  const sufixo = tipo === "lib" ? "Lib" : "Mon";
-  const drop = $("drop" + sufixo);
-  drop.classList.toggle("carregado", alvo.linhas.length > 0);
-  $("info" + sufixo).innerHTML = alvo.arquivos.length
-    ? alvo.arquivos.map((a) => `📄 ${a.nome} — <b>${fmt(a.qtd)}</b> linhas`).join("<br>") +
-      `<br>Total: <b>${fmt(alvo.linhas.length)}</b> linhas`
-    : "Nenhum arquivo";
-  preencherSelect($("key" + sufixo), alvo.colunas, sugerirChave(alvo.colunas));
-}
-
-function atualizarOpcoes() {
-  const cols = [...new Set([...base.lib.colunas, ...base.mon.colunas])];
-  const atual = $("grupo").value;
-  preencherSelect($("grupo"), cols, atual && cols.includes(atual) ? atual : sugerirGrupo(base.lib.colunas), "(sem agrupamento)");
-  $("btnComparar").disabled = !(base.lib.linhas.length && base.mon.linhas.length);
-}
-
-/* ---------- Utilidades de valores ---------- */
 
 function chave(v) {
   if (v === null || v === undefined) return "";
   return String(v).trim().replace(/\.0+$/, "");
 }
 
-// Retorna minutos do dia (0–1439) ou null
-function minutosDaLinha(l) {
-  const h = l["HORA"], m = l["MINUTO"];
-  if (h !== undefined && h !== "") {
-    if (h instanceof Date) return h.getHours() * 60 + h.getMinutes();
-    if (typeof h === "number" && h < 1 && h > 0) return Math.round(h * 1440); // hora como fração do Excel
-    const s = String(h).trim();
-    const mm = s.match(/^(\d{1,2})[:h](\d{1,2})/);
-    if (mm) return +mm[1] * 60 + +mm[2];
-    if (!isNaN(+s)) return +s * 60 + (isNaN(+m) || m === "" ? 0 : +m);
-  }
-  for (const c of ["DATA", "DTMONTAGEM", "DATAHORA", "DT_MONTAGEM"]) {
-    const d = l[c];
-    if (d instanceof Date && (d.getHours() || d.getMinutes())) return d.getHours() * 60 + d.getMinutes();
-  }
+// "1.576,68" -> 1576.68 ; 1576.68 -> 1576.68
+function numeroBR(v) {
+  if (typeof v === "number") return v;
+  const s = String(v ?? "").trim();
+  if (!s) return "";
+  const n = s.includes(",") ? +s.replace(/\./g, "").replace(",", ".") : +s;
+  return isNaN(n) ? "" : n;
+}
+
+function paraData(v) {
+  if (v instanceof Date) return new Date(v.getFullYear(), v.getMonth(), v.getDate());
+  const s = String(v ?? "").trim();
+  let m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (m) return new Date(+m[1], +m[2] - 1, +m[3]);
+  m = s.match(/^(\d{2})\/(\d{2})\/(\d{4})/);
+  if (m) return new Date(+m[3], +m[2] - 1, +m[1]);
+  if (typeof v === "number" && v > 30000) return new Date(Math.round((v - 25569) * 86400000) + new Date().getTimezoneOffset() * 60000);
   return null;
 }
 
-const fmtHora = (min) => (min === null ? "" : String(Math.floor(min / 60)).padStart(2, "0") + ":" + String(min % 60).padStart(2, "0"));
-
-function valorTela(v) {
-  if (v instanceof Date) {
-    const temHora = v.getHours() || v.getMinutes();
-    return v.toLocaleDateString("pt-BR") + (temHora ? " " + v.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }) : "");
-  }
-  if (typeof v === "number" && !Number.isInteger(v)) return v.toLocaleString("pt-BR", { maximumFractionDigits: 2 });
-  return v ?? "";
+// Data/hora de liberação = DATA + HORA:MINUTO
+function dataLiberacao(l) {
+  const d = paraData(l["DATA"]);
+  if (!d) return null;
+  const h = +l["HORA"], m = +l["MINUTO"];
+  if (!isNaN(h)) d.setHours(h, isNaN(m) ? 0 : m);
+  return d;
 }
+
+const fmtDataHora = (d) => (d ? d.toLocaleDateString("pt-BR") + " " + d.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }) : "");
+const fmtData = (v) => { const d = paraData(v); return d ? d.toLocaleDateString("pt-BR") : ""; };
 
 /* ---------- Comparação ---------- */
 
 function comparar() {
-  const kLib = $("keyLib").value, kMon = $("keyMon").value, grupo = $("grupo").value;
   const corteTxt = $("corte").value;
-  const corte = corteTxt ? +corteTxt.slice(0, 2) * 60 + +corteTxt.slice(3, 5) : null;
+  const corte = corteTxt ? new Date(corteTxt) : null;
 
-  // Montados: um registro por pedido (mantém o horário mais cedo)
-  const mapaMon = new Map();
-  base.mon.linhas.forEach((l) => {
-    const k = chave(l[kMon]);
-    if (!k) return;
-    const t = minutosDaLinha(l);
-    const ant = mapaMon.get(k);
-    if (!ant || (t !== null && (ant.t === null || t < ant.t))) mapaMon.set(k, { linha: l, t });
+  // Montados por estado (BA + BA_SF já caem juntos em BA)
+  const mon = new Map(); // "UF|pedido" -> linha
+  arquivos.mon.forEach((a) => {
+    a.linhas.forEach((l) => {
+      const col = acharColuna(l, CHAVE_MON);
+      const k = col ? chave(l[col]) : "";
+      if (!k || !/\d/.test(k)) return; // ignora linha de total/rodapé
+      const id = a.estado + "|" + k;
+      if (!mon.has(id)) mon.set(id, { estado: a.estado, pedido: k, linha: l });
+    });
   });
 
-  // Liberados: um registro por pedido
-  const mapaLib = new Map();
-  base.lib.linhas.forEach((l) => {
-    const k = chave(l[kLib]);
-    if (k && !mapaLib.has(k)) mapaLib.set(k, l);
+  // Liberados por estado
+  const lib = new Map();
+  let foraEstado = 0, dup = 0;
+  arquivos.lib.forEach((a) => {
+    const prefixos = FILTRO_PRACA[a.estado];
+    a.linhas.forEach((l) => {
+      const col = acharColuna(l, CHAVE_LIB);
+      const k = col ? chave(l[col]) : "";
+      if (!k || !/\d/.test(k)) return;
+      if (prefixos && !prefixos.some((p) => String(l["PRACA"] ?? "").toUpperCase().startsWith(p))) { foraEstado++; return; }
+      const id = a.estado + "|" + k;
+      if (lib.has(id)) { dup++; return; }
+      lib.set(id, { estado: a.estado, pedido: k, linha: l });
+    });
   });
 
   const detalhe = [];
-  const grupos = new Map();
-  const somaGrupo = (g, campo) => {
-    if (!grupos.has(g)) grupos.set(g, { grupo: g, lib: 0, mon: 0, apos: 0, nao: 0 });
-    grupos.get(g)[campo]++;
-  };
-
-  mapaLib.forEach((linha, k) => {
-    const m = mapaMon.get(k);
-    let status = "Não montado";
-    if (m) status = corte !== null && m.t !== null && m.t > corte ? "Montado após corte" : "Montado";
-    const g = grupo ? chave(linha[grupo] ?? (m ? m.linha[grupo] : "")) || "(vazio)" : "Total";
-    somaGrupo(g, "lib");
-    if (status === "Montado") somaGrupo(g, "mon");
-    else if (status === "Montado após corte") somaGrupo(g, "apos");
-    else somaGrupo(g, "nao");
-    detalhe.push({ pedido: k, grupo: g, status, hora: m ? fmtHora(m.t) : "", linha, linhaMon: m ? m.linha : null });
+  lib.forEach((li, id) => {
+    const m = mon.get(id);
+    const liberadoEm = dataLiberacao(li.linha);
+    const aposCorte = corte && liberadoEm && liberadoEm > corte;
+    let status;
+    if (aposCorte) status = m ? "Após corte (montado)" : "Após corte";
+    else status = m ? "Montado" : "Não montado";
+    detalhe.push(montarRegistro(li.estado, li.pedido, status, li.linha, m ? m.linha : null, liberadoEm));
   });
 
   const extras = [];
-  mapaMon.forEach((m, k) => {
-    if (!mapaLib.has(k)) {
-      const g = grupo ? chave(m.linha[grupo]) || "(vazio)" : "Total";
-      extras.push({ pedido: k, grupo: g, status: "Sem liberação", hora: fmtHora(m.t), linha: m.linha, linhaMon: m.linha });
-    }
+  mon.forEach((m, id) => {
+    if (!lib.has(id)) extras.push(montarRegistro(m.estado, m.pedido, "Sem liberação", null, m.linha, null));
   });
 
-  resultado = {
-    detalhe, extras, usouCorte: corte !== null, grupo,
-    grupos: [...grupos.values()].sort((a, b) => b.lib - a.lib),
-    dupLib: base.lib.linhas.length - mapaLib.size,
-  };
+  resultado = { detalhe, extras, usouCorte: !!corte, foraEstado, dup };
+  ordem = { col: null, asc: true };
   renderizar();
+}
+
+function montarRegistro(estado, pedido, status, l, m, liberadoEm) {
+  l = l || {}; m = m || {};
+  return {
+    estado, pedido, status,
+    liberadoEm,
+    posicao: l["POSICAO"] ?? "",
+    filial: chave(l["CODFILIAL"] ?? m["FILIAL"] ?? ""),
+    cliente: l["NOMECLIENTE"] || m["CLIENTE"] || "",
+    praca: l["PRACA"] ?? "",
+    cidade: l["CIDADE"] || m["CIDADE"] || "",
+    supervisor: l["NOMESUP"] ?? "",
+    rca: l["NOMERCA"] ?? "",
+    dtEntrega: fmtData(l["DTENTREGA"]),
+    valor: numeroBR(l["VLTOTAL"] !== undefined && l["VLTOTAL"] !== "" ? l["VLTOTAL"] : m["ENTREGA VALOR"]),
+    peso: numeroBR(l["PESOBRUTOTOT"] !== undefined && l["PESOBRUTOTOT"] !== "" ? l["PESOBRUTOTOT"] : m["ENTREGA PESO"]),
+    rota: m["DESCRIÇÃO DA ROTA"] ?? "",
+    estadoOrdem: m["ESTADO DA ORDEM"] ?? "",
+    sessao: m["SESSÃO DE ROTEIRIZAÇÃO"] ?? "",
+  };
+}
+
+/* ---------- Resumo por grupo ---------- */
+
+const GRUPOS = {
+  estado: "Estado",
+  filial: "Filial",
+  praca: "Praça",
+  supervisor: "Supervisor",
+  dtEntrega: "Data de entrega",
+};
+
+function resumir(campo) {
+  const mapa = new Map();
+  const get = (g) => {
+    if (!mapa.has(g)) mapa.set(g, { grupo: g, lib: 0, mon: 0, nao: 0, apos: 0, aposMon: 0, extra: 0, valorNao: 0 });
+    return mapa.get(g);
+  };
+  resultado.detalhe.forEach((d) => {
+    const g = get(d[campo] || "(vazio)");
+    if (d.status.startsWith("Após corte")) { g.apos++; if (d.status.includes("montado")) g.aposMon++; return; }
+    g.lib++;
+    if (d.status === "Montado") g.mon++;
+    else { g.nao++; g.valorNao += +d.valor || 0; }
+  });
+  resultado.extras.forEach((d) => get(d[campo] || "(vazio)").extra++);
+  return [...mapa.values()].sort((a, b) => (campo === "estado" ? a.grupo.localeCompare(b.grupo) : b.lib - a.lib));
 }
 
 /* ---------- Renderização ---------- */
 
+function esconderResultado() {
+  resultado = null;
+  $("resultado").hidden = true;
+}
+
 function renderizar() {
   const r = resultado;
-  const tot = r.grupos.reduce((s, g) => ({ lib: s.lib + g.lib, mon: s.mon + g.mon, apos: s.apos + g.apos, nao: s.nao + g.nao }), { lib: 0, mon: 0, apos: 0, nao: 0 });
+  const grupos = resumir($("grupo").value);
+  const tot = grupos.reduce((s, g) => {
+    for (const k of ["lib", "mon", "nao", "apos", "aposMon", "extra", "valorNao"]) s[k] += g[k];
+    return s;
+  }, { lib: 0, mon: 0, nao: 0, apos: 0, aposMon: 0, extra: 0, valorNao: 0 });
 
   $("resultado").hidden = false;
   $("kLib").textContent = fmt(tot.lib);
+  $("kLibSub").textContent = r.usouCorte ? "liberados até o corte" : "pedidos únicos";
   $("kMon").textContent = fmt(tot.mon);
   $("kMonPct").textContent = fmtPct(pct(tot.mon, tot.lib)) + " dos liberados";
+  $("kNao").textContent = fmt(tot.nao);
+  $("kNaoPct").textContent = fmtPct(pct(tot.nao, tot.lib)) + " · " + fmtMoeda(tot.valorNao);
   $("kpiCorte").hidden = !r.usouCorte;
   $("kApos").textContent = fmt(tot.apos);
-  $("kAposPct").textContent = fmtPct(pct(tot.apos, tot.lib)) + " dos liberados";
-  $("kNao").textContent = fmt(tot.nao);
-  $("kNaoPct").textContent = fmtPct(pct(tot.nao, tot.lib)) + " dos liberados";
-  $("kExtra").textContent = fmt(r.extras.length);
+  $("kAposSub").textContent = `${fmt(tot.aposMon)} já montados · fora do cálculo`;
+  $("kExtra").textContent = fmt(tot.extra);
 
-  // Tabela por grupo
-  $("tituloGrupo").textContent = r.grupo || "total";
-  $("thGrupo").textContent = r.grupo || "Grupo";
+  // Tabela de resumo
+  const campo = $("grupo").value;
+  $("thGrupo").textContent = GRUPOS[campo];
   document.querySelectorAll(".col-corte").forEach((e) => (e.style.display = r.usouCorte ? "" : "none"));
-  const linhaGrupo = (g, tag = "td") => {
-    const p1 = pct(g.mon, g.lib), p2 = pct(g.apos, g.lib);
+  const linha = (g) => {
+    const p = pct(g.mon, g.lib);
+    const cor = p >= 95 ? "bom" : p >= 80 ? "medio" : "ruim";
     return `<tr>
-      <${tag}>${g.grupo}</${tag}>
-      <${tag} class="num">${fmt(g.lib)}</${tag}>
-      <${tag} class="num">${fmt(g.mon)}</${tag}>
-      <${tag} class="num" style="display:${r.usouCorte ? "" : "none"}">${fmt(g.apos)}</${tag}>
-      <${tag} class="num">${fmt(g.nao)}</${tag}>
-      <${tag}><div class="barra"><div class="trilho"><div class="p1" style="width:${p1}%"></div><div class="p2" style="width:${p2}%"></div></div><em>${fmtPct(p1)}</em></div></${tag}>
+      <td><b>${g.grupo}</b></td>
+      <td class="num">${fmt(g.lib)}</td>
+      <td class="num">${fmt(g.mon)}</td>
+      <td class="num">${fmt(g.nao)}</td>
+      <td class="num col-corte" style="display:${r.usouCorte ? "" : "none"}">${fmt(g.apos)}</td>
+      <td class="num">${fmt(g.extra)}</td>
+      <td class="num">${fmtMoeda(g.valorNao)}</td>
+      <td><div class="barra ${cor}"><div class="trilho"><div class="p1" style="width:${p}%"></div></div><em>${fmtPct(p)}</em></div></td>
     </tr>`;
   };
   const tab = $("tabGrupo");
-  tab.querySelector("tbody").innerHTML = r.grupos.map((g) => linhaGrupo(g)).join("");
-  tab.querySelector("tfoot")?.remove();
-  if (r.grupos.length > 1) {
-    const tf = document.createElement("tfoot");
-    tf.innerHTML = linhaGrupo({ grupo: "TOTAL", ...tot });
-    tab.appendChild(tf);
-  }
+  tab.querySelector("tbody").innerHTML = grupos.map(linha).join("");
+  tab.querySelector("tfoot").innerHTML = grupos.length > 1 ? linha({ grupo: "TOTAL", ...tot }) : "";
+
+  // Avisos
+  const avisos = [];
+  if (r.foraEstado) avisos.push(`${fmt(r.foraEstado)} pedido(s) de outras praças foram ignorados nos liberados (${Object.keys(FILTRO_PRACA).join(", ")}).`);
+  if (r.dup) avisos.push(`${fmt(r.dup)} pedido(s) repetidos nos liberados foram contados uma vez só.`);
+  grupos.filter((g) => campo === "estado" && g.lib > 0 && g.mon === 0).forEach((g) =>
+    avisos.push(`<b>${g.grupo}</b>: nenhum liberado foi encontrado nos montados — confira se as duas bases são do mesmo dia/extração.`));
+  $("avisos").innerHTML = avisos.map((a) => `<div>⚠️ ${a}</div>`).join("");
+  $("avisos").hidden = !avisos.length;
+
+  // Filtro de estado no detalhe
+  const sel = $("filtroEstado"), atual = sel.value;
+  const ufs = [...new Set([...r.detalhe, ...r.extras].map((d) => d.estado))].sort();
+  sel.innerHTML = `<option value="">Todos os estados</option>` + ufs.map((u) => `<option>${u}</option>`).join("");
+  sel.value = ufs.includes(atual) ? atual : "";
 
   renderDetalhe();
-  if (r.dupLib > 0) toast(`${fmt(r.dupLib)} linha(s) repetidas na base de liberados foram contadas uma vez só.`);
-  $("resultado").scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
-function colunasDetalhe() {
-  const prefer = ["CODCLI", "NOMECLIENTE", "CLIENTE", "PRACA", "CIDADE", "NOMESUP", "NOMERCA", "DTENTREGA", "VLTOTAL", "PESOBRUTOTOT", "NUMCARREGAMENTO", "PLACA"];
-  const cols = [...new Set([...base.lib.colunas, ...base.mon.colunas])];
-  const usar = prefer.filter((c) => cols.includes(c) && c !== $("keyLib").value && c !== resultado.grupo);
-  return usar.length ? usar : base.lib.colunas.filter((c) => c !== $("keyLib").value).slice(0, 5);
-}
+const COLUNAS = [
+  ["estado", "Estado"], ["pedido", "Pedido"], ["status", "Status"], ["liberadoEm", "Liberado em"],
+  ["filial", "Filial"], ["cliente", "Cliente"], ["praca", "Praça"], ["cidade", "Cidade"],
+  ["supervisor", "Supervisor"], ["dtEntrega", "Dt. entrega"], ["valor", "Valor"], ["peso", "Peso (kg)"],
+  ["rota", "Rota RoadNet"], ["estadoOrdem", "Estado da ordem"],
+];
 
 function linhasFiltradas() {
-  const st = $("filtroStatus").value;
+  const st = $("filtroStatus").value, uf = $("filtroEstado").value;
   const busca = $("busca").value.trim().toLowerCase();
-  let lista = st === "Sem liberação" ? resultado.extras : resultado.detalhe.filter((d) => !st || d.status === st);
-  const extras = colunasDetalhe();
-  if (busca) {
-    lista = lista.filter((d) => {
-      const txt = [d.pedido, d.grupo, ...extras.map((c) => valorCol(d, c))].join(" ").toLowerCase();
-      return txt.includes(busca);
-    });
-  }
-  if (ordemDetalhe.col) {
-    const c = ordemDetalhe.col, s = ordemDetalhe.asc ? 1 : -1;
-    const val = (d) => (c === "pedido" || c === "grupo" || c === "status" || c === "hora" ? d[c] : valorCol(d, c));
+  let lista = st === "Sem liberação" ? resultado.extras
+    : st === "Após corte" ? resultado.detalhe.filter((d) => d.status.startsWith("Após corte"))
+    : resultado.detalhe.filter((d) => !st || d.status === st);
+  if (uf) lista = lista.filter((d) => d.estado === uf);
+  if (busca) lista = lista.filter((d) => COLUNAS.some(([k]) => String(d[k] ?? "").toLowerCase().includes(busca)));
+  if (ordem.col) {
+    const c = ordem.col, s = ordem.asc ? 1 : -1;
     lista = [...lista].sort((a, b) => {
-      const x = val(a), y = val(b);
-      const nx = +x, ny = +y;
-      if (!isNaN(nx) && !isNaN(ny) && x !== "" && y !== "") return (nx - ny) * s;
-      return String(x).localeCompare(String(y), "pt-BR") * s;
+      const x = a[c], y = b[c];
+      if (x instanceof Date || y instanceof Date) return ((x ? +x : 0) - (y ? +y : 0)) * s;
+      if (typeof x === "number" && typeof y === "number") return (x - y) * s;
+      return String(x ?? "").localeCompare(String(y ?? ""), "pt-BR", { numeric: true }) * s;
     });
   }
   return lista;
 }
 
-function valorCol(d, c) {
-  const v = d.linha[c];
-  if (v !== undefined && v !== "") return v;
-  return d.linhaMon ? d.linhaMon[c] ?? "" : "";
+function celula(k, v) {
+  if (k === "liberadoEm") return fmtDataHora(v);
+  if (k === "valor") return fmtMoeda(v);
+  if (k === "peso") return v === "" ? "" : Number(v).toLocaleString("pt-BR", { maximumFractionDigits: 2 });
+  if (k === "status") {
+    const c = v.startsWith("Após") ? "apos" : v === "Montado" ? "ok" : v === "Não montado" ? "nao" : "sem";
+    return `<span class="status ${c}">${v}</span>`;
+  }
+  return v ?? "";
 }
 
 function renderDetalhe() {
-  const extras = colunasDetalhe();
-  const cab = [
-    ["pedido", "Pedido"], ["grupo", resultado.grupo || "Grupo"], ["status", "Status"], ["hora", "Hora montagem"],
-    ...extras.map((c) => [c, c]),
-  ];
+  if (!resultado) return;
   const tab = $("tabDetalhe");
-  tab.querySelector("thead").innerHTML =
-    "<tr>" + cab.map(([k, t]) => `<th data-col="${k}">${t}${ordemDetalhe.col === k ? (ordemDetalhe.asc ? " ▲" : " ▼") : ""}</th>`).join("") + "</tr>";
+  tab.querySelector("thead").innerHTML = "<tr>" + COLUNAS.map(([k, t]) =>
+    `<th data-col="${k}">${t}${ordem.col === k ? (ordem.asc ? " ▲" : " ▼") : ""}</th>`).join("") + "</tr>";
 
   const lista = linhasFiltradas();
   const LIMITE = 1000;
-  const classe = (s) => (s === "Montado após corte" ? "apos" : s.split(" ")[0]);
-  tab.querySelector("tbody").innerHTML = lista.slice(0, LIMITE).map((d) => `<tr>
-      <td>${d.pedido}</td><td>${d.grupo}</td>
-      <td><span class="status ${classe(d.status)}">${d.status}</span></td>
-      <td>${d.hora}</td>
-      ${extras.map((c) => { const v = valorCol(d, c); return `<td class="${typeof v === "number" ? "num" : ""}">${valorTela(v)}</td>`; }).join("")}
-    </tr>`).join("");
+  tab.querySelector("tbody").innerHTML = lista.slice(0, LIMITE).map((d) =>
+    "<tr>" + COLUNAS.map(([k]) => `<td class="${k === "valor" || k === "peso" ? "num" : ""}">${celula(k, d[k])}</td>`).join("") + "</tr>"
+  ).join("");
 
   $("contagem").textContent = lista.length > LIMITE
     ? `Mostrando ${fmt(LIMITE)} de ${fmt(lista.length)} pedidos — use "Exportar Excel" para ver todos.`
     : `${fmt(lista.length)} pedido(s)`;
 
-  tab.querySelectorAll("th").forEach((th) => th.onclick = () => {
+  tab.querySelectorAll("th").forEach((th) => (th.onclick = () => {
     const c = th.dataset.col;
-    ordemDetalhe = { col: c, asc: ordemDetalhe.col === c ? !ordemDetalhe.asc : true };
+    ordem = { col: c, asc: ordem.col === c ? !ordem.asc : true };
     renderDetalhe();
-  });
+  }));
 }
 
 /* ---------- Exportação ---------- */
 
 function exportar() {
   if (!resultado) return;
-  const extras = colunasDetalhe();
-  const nomeGrupo = resultado.grupo || "GRUPO";
   const paraLinha = (d) => {
-    const o = { PEDIDO: d.pedido, [nomeGrupo]: d.grupo, STATUS: d.status, "HORA MONTAGEM": d.hora };
-    extras.forEach((c) => (o[c] = valorCol(d, c)));
+    const o = {};
+    COLUNAS.forEach(([k, t]) => {
+      o[t] = k === "liberadoEm" ? fmtDataHora(d[k]) : d[k];
+    });
     return o;
   };
-
   const wb = XLSX.utils.book_new();
 
-  const resumo = resultado.grupos.map((g) => ({
-    [nomeGrupo]: g.grupo, LIBERADOS: g.lib, MONTADOS: g.mon,
-    ...(resultado.usouCorte ? { "APÓS CORTE": g.apos } : {}),
-    "NÃO MONTADOS": g.nao, "% MONTADO": +pct(g.mon, g.lib).toFixed(1),
+  const resumo = resumir("estado").map((g) => ({
+    ESTADO: g.grupo, LIBERADOS: g.lib, MONTADOS: g.mon, "NÃO MONTADOS": g.nao,
+    ...(resultado.usouCorte ? { "LIBERADOS APÓS CORTE": g.apos } : {}),
+    "MONTADOS SEM LIBERAÇÃO": g.extra, "VALOR NÃO MONTADO": +g.valorNao.toFixed(2),
+    "% MONTADO": +pct(g.mon, g.lib).toFixed(1),
   }));
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(resumo), "Resumo");
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(resultado.detalhe.map(paraLinha)), "Liberados");
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(resumo), "Resumo por estado");
+
   const nao = resultado.detalhe.filter((d) => d.status === "Não montado").map(paraLinha);
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(nao.length ? nao : [{ PEDIDO: "" }]), "Não montados");
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(nao.length ? nao : [{ Pedido: "" }]), "Não montados");
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(resultado.detalhe.map(paraLinha)), "Todos liberados");
   if (resultado.extras.length)
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(resultado.extras.map(paraLinha)), "Sem liberação");
 
-  const hoje = new Date().toLocaleDateString("pt-BR").replace(/\//g, "-");
-  XLSX.writeFile(wb, `Liberados_x_Montados_${hoje}.xlsx`);
+  const agora = new Date();
+  const carimbo = agora.toLocaleDateString("pt-BR").replace(/\//g, "-") + "_" +
+    String(agora.getHours()).padStart(2, "0") + "h" + String(agora.getMinutes()).padStart(2, "0");
+  XLSX.writeFile(wb, `Liberados_x_Montados_${carimbo}.xlsx`);
 }
 
 /* ---------- Eventos ---------- */
 
-function configurarDrop(tipo) {
-  const sufixo = tipo === "lib" ? "Lib" : "Mon";
-  const drop = $("drop" + sufixo), input = $("file" + sufixo);
-  drop.addEventListener("click", (e) => { if (!e.target.closest("select, label")) input.click(); });
-  input.addEventListener("change", () => { carregar(tipo, [...input.files]); input.value = ""; });
-  drop.addEventListener("dragover", (e) => { e.preventDefault(); drop.classList.add("over"); });
-  drop.addEventListener("dragleave", () => drop.classList.remove("over"));
-  drop.addEventListener("drop", (e) => {
-    e.preventDefault();
-    drop.classList.remove("over");
-    carregar(tipo, [...e.dataTransfer.files]);
+function configurarDrop(el, input, tipoPadrao) {
+  el.addEventListener("click", (e) => { if (!e.target.closest("button, select, input")) input.click(); });
+  input.addEventListener("change", () => { carregar([...input.files], tipoPadrao); input.value = ""; });
+  el.addEventListener("dragover", (e) => { e.preventDefault(); e.stopPropagation(); el.classList.add("over"); });
+  el.addEventListener("dragleave", () => el.classList.remove("over"));
+  el.addEventListener("drop", (e) => {
+    e.preventDefault(); e.stopPropagation();
+    el.classList.remove("over");
+    carregar([...e.dataTransfer.files], tipoPadrao);
   });
 }
 
+// Soltar arquivos em qualquer lugar da página: classifica pelo nome
+document.addEventListener("dragover", (e) => e.preventDefault());
+document.addEventListener("drop", (e) => { e.preventDefault(); carregar([...e.dataTransfer.files], null); });
+
 function limpar() {
-  ["lib", "mon"].forEach((t) => { base[t] = { arquivos: [], linhas: [], colunas: [] }; atualizarPainel(t); });
-  atualizarOpcoes();
-  resultado = null;
-  $("resultado").hidden = true;
+  arquivos.lib.clear();
+  arquivos.mon.clear();
+  atualizarPaineis();
+  esconderResultado();
   $("corte").value = "";
 }
 
@@ -377,14 +464,27 @@ function toast(msg, erro = false) {
   t.className = "toast" + (erro ? " erro" : "");
   t.hidden = false;
   clearTimeout(timerToast);
-  timerToast = setTimeout(() => (t.hidden = true), 3500);
+  timerToast = setTimeout(() => (t.hidden = true), 4000);
 }
 
-configurarDrop("lib");
-configurarDrop("mon");
+function corteHoje(hhmm) {
+  const d = new Date();
+  const p = (n) => String(n).padStart(2, "0");
+  $("corte").value = `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${hhmm}`;
+  if (resultado) comparar();
+}
+
+configurarDrop($("dropTodos"), $("fileTodos"), null);
+configurarDrop($("dropLib"), $("fileLib"), "lib");
+configurarDrop($("dropMon"), $("fileMon"), "mon");
 $("btnComparar").onclick = comparar;
 $("btnExportar").onclick = exportar;
 $("btnLimpar").onclick = limpar;
+$("btnCorte1715").onclick = () => corteHoje("17:15");
+$("btnSemCorte").onclick = () => { $("corte").value = ""; if (resultado) comparar(); };
+$("corte").addEventListener("change", () => { if (resultado) comparar(); });
+$("grupo").addEventListener("change", () => { if (resultado) renderizar(); });
 $("filtroStatus").onchange = renderDetalhe;
+$("filtroEstado").onchange = renderDetalhe;
 $("busca").oninput = renderDetalhe;
-["keyLib", "keyMon", "grupo", "corte"].forEach((id) => $(id).addEventListener("change", () => { if (resultado) comparar(); }));
+atualizarPaineis();
