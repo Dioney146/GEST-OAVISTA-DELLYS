@@ -1,32 +1,9 @@
 {
-  "functions": {
-    "api/dados.js": {
-      "includeFiles": "data/**"
-    },
-    "api/preparar.js": {
-      "maxDuration": 30
-    },
-    "api/publicar.js": {
-      "maxDuration": 30
-    },
-    "api/arquivos.js": {
-      "maxDuration": 30
-    }
-  },
-  "ignoreCommand": "git diff --quiet HEAD^ HEAD -- . ':(exclude)dados'",
+  "cleanUrls": true,
   "headers": [
     {
       "source": "/(.*)",
-      "headers": [
-        {
-          "key": "X-Content-Type-Options",
-          "value": "nosniff"
-        },
-        {
-          "key": "Referrer-Policy",
-          "value": "no-referrer"
-        }
-      ]
+      "headers": [{ "key": "Cache-Control", "value": "public, max-age=0, must-revalidate" }]
     }
   ]
 }
