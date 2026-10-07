@@ -165,3 +165,16 @@ td.pend { color: #fca5a5; font-weight: 700; }
   .grid2 { grid-template-columns: 1fr; }
   .busca-linha { grid-template-columns: 1fr; }
 }
+
+/* ---------- ATUALIZAR DADOS ---------- */
+.drop { display: block; border: 2px dashed rgba(245,158,11,0.45); border-radius: 14px; padding: 26px 18px; text-align: center; cursor: pointer; color: #fff; background: rgba(245,158,11,0.04); margin-bottom: 14px; }
+.drop:hover, .drop.sobre { background: rgba(245,158,11,0.12); border-color: var(--accent); }
+.linha-form { display: flex; gap: 10px; max-width: 460px; }
+.input.mini, .btn.mini { padding: 6px 10px; font-size: 12.5px; width: auto; }
+.ok-txt { color: #86efac; font-weight: 600; }
+.erro-txt { color: #fca5a5; }
+.check { display: flex; gap: 10px; align-items: flex-start; margin: 14px 0; color: #e5e7eb; line-height: 1.4; cursor: pointer; }
+.check input { margin-top: 3px; accent-color: var(--accent); }
+.acoes { display: flex; gap: 10px; flex-wrap: wrap; margin: 6px 0 8px; }
+.carregando.mini { min-height: 0; padding: 10px 0; justify-content: flex-start; }
+a.btn { display: inline-block; text-decoration: none; }
