@@ -44,6 +44,14 @@ vercel.json      configuração da Vercel
 - **Detalhes dos Pedidos**: pedido a pedido, com filtro de situação, busca e **Exportar Excel**.
 - **Montados**: Montados x Liberados x Ficaram para trás por estado, com corte de liberação opcional.
 
+## Regras dos montados
+
+- **Veículos** = quantidade de **ID da rota** diferentes (1ª coluna da exportação do RoadNet), por estado e por data.
+  Se a exportação de um estado não tiver essa coluna, os veículos aparecem como "—".
+- Pedido com **Estado da Ordem = "Não atendido"** nunca conta como montado: sai dos montados
+  e, se estiver nos liberados, entra em **Ficaram para trás**.
+  A lista de status fica em `ESTADOS_NAO_MONTADO`, no começo do `app.js`.
+
 ## Histórico
 
 - Cada data de importação fica salva neste navegador (IndexedDB).

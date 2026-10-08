@@ -39,6 +39,9 @@ const CIDADES_ES = new Set([
 // Nomes que existem em MG e no ES: decide pela longitude (o ES fica a leste de -42°)
 const CIDADES_AMBIGUAS = new Set(["BOA ESPERANCA"]);
 
+// "Estado da Ordem" do RoadNet que NUNCA conta como montado (sem acento, maiúsculas)
+const ESTADOS_NAO_MONTADO = new Set(["NAO ATENDIDO"]);
+
 // Em quais estados do mapa cada grupo aparece
 const MAPA_UF = { MG: ["mg"], ES: ["es"], SPW: ["sp"], SP: ["sp"], AM: ["am"], BA: ["ba"], DF: ["df"], MT: ["mt"] };
 
@@ -174,6 +177,7 @@ function enxugarMontado(l) {
     w: numeroBR(l["ENTREGA PESO"]),
     rota: String(l["DESCRIÇÃO DA ROTA"] ?? "").trim(),
     cod: chave(l["CODROTA"]),
+    idr: chave(l["ID DA ROTA"]),
     st: String(l["ESTADO DA ORDEM"] ?? "").trim(),
   };
 }
@@ -231,23 +235,30 @@ let dataPreferida = null; // data a selecionar no filtro depois de uma importaç
 
 /* ---------- Processamento ---------- */
 
+function naoMontado(m) {
+  return ESTADOS_NAO_MONTADO.has(normCidade(m.st));
+}
+
 function processar() {
   LIB = []; MON = [];
   SNAPS.forEach((snap) => {
-    const lib = new Map(), mon = new Map();
+    const lib = new Map(), mon = new Map(), naoAtendidos = new Map();
     Object.entries(snap.arquivos).forEach(([nome, a]) => {
       const estado = estadoDoArquivo(nome); // recalcula: vale também para o histórico já salvo
       const alvo = a.tipo === "lib" ? lib : mon;
       a.linhas.forEach((r) => {
         if (a.tipo === "lib" && !entraNoEstado(r, estado)) return;
         const id = estado + "|" + r.p;
+        // "Não atendido" no RoadNet nunca conta como montado
+        if (a.tipo === "mon" && naoMontado(r)) { naoAtendidos.set(id, r); return; }
         if (!alvo.has(id)) alvo.set(id, { ...r, uf: estado, data: snap.data });
       });
     });
     lib.forEach((r, id) => {
       const m = mon.get(id);
       r.montado = !!m;
-      r.rota = m ? m.rota : "";
+      r.rota = m ? m.rota : naoAtendidos.has(id) ? "Não atendido (RoadNet)" : "";
+      r.idr = m ? m.idr : "";
       LIB.push(r);
     });
     mon.forEach((m, id) => {
@@ -463,7 +474,7 @@ function pill(p) {
 const COLS_DET = [
   ["data", "DATA IMP."], ["uf", "ESTADO"], ["p", "PEDIDO"], ["sit", "SITUAÇÃO"], ["pos", "POSIÇÃO"],
   ["cli", "CLIENTE"], ["cid", "CIDADE"], ["pr", "PRAÇA"], ["sup", "SUPERVISOR"], ["ent", "DT. ENTREGA"],
-  ["lib", "LIBERADO EM"], ["v", "VALOR"], ["w", "PESO"], ["rota", "ROTA ROADNET"],
+  ["lib", "LIBERADO EM"], ["v", "VALOR"], ["w", "PESO"], ["idr", "ID DA ROTA"], ["rota", "ROTA ROADNET"],
 ];
 
 function linhasDetalhe() {
@@ -517,14 +528,15 @@ function renderMontados(d) {
   const corte = $("corte").value; // "YYYY-MM-DDTHH:MM" (mesmo formato do campo lib)
   const linhas = new Map();
   const get = (uf) => {
-    if (!linhas.has(uf)) linhas.set(uf, { uf, mn: 0, mv: 0, mw: 0, veic: new Set(), ln: 0, lv: 0, lw: 0, tn: 0, tv: 0, tw: 0, lmon: 0, apos: 0 });
+    if (!linhas.has(uf)) linhas.set(uf, { uf, mn: 0, mv: 0, mw: 0, veic: new Set(), semId: 0, ln: 0, lv: 0, lw: 0, tn: 0, tv: 0, tw: 0, lmon: 0, apos: 0 });
     return linhas.get(uf);
   };
   d.mon.forEach((m) => {
     const g = get(m.uf);
     g.mn++; g.mv += m.v; g.mw += m.w;
-    const veic = m.cod || m.rota;
-    if (veic) g.veic.add(m.data + "|" + veic);
+    // Veículos = IDs de rota distintos (coluna "ID da rota" do RoadNet)
+    if (m.idr) g.veic.add(m.data + "|" + m.idr);
+    else g.semId++;
   });
   d.lib.forEach((r) => {
     const g = get(r.uf);
@@ -538,12 +550,13 @@ function renderMontados(d) {
   const tot = lista.reduce((s, g) => {
     for (const k of ["mn", "mv", "mw", "ln", "lv", "lw", "tn", "tv", "tw", "lmon", "apos"]) s[k] += g[k];
     s.veic += g.veic.size;
+    s.semId += g.semId;
     return s;
-  }, { mn: 0, mv: 0, mw: 0, veic: 0, ln: 0, lv: 0, lw: 0, tn: 0, tv: 0, tw: 0, lmon: 0, apos: 0 });
+  }, { mn: 0, mv: 0, mw: 0, veic: 0, semId: 0, ln: 0, lv: 0, lw: 0, tn: 0, tv: 0, tw: 0, lmon: 0, apos: 0 });
 
   const linha = (g, nome, veic) => `<tr>
       <td class="forte">${esc(nome)}</td>
-      <td class="num monv">${fmtN(g.mn)}</td><td class="num monv">${fmtR(g.mv)}</td><td class="num monv">${fmtKg(g.mw)}</td><td class="num monv">${fmtN(veic)}</td>
+      <td class="num monv">${fmtN(g.mn)}</td><td class="num monv">${fmtR(g.mv)}</td><td class="num monv">${fmtKg(g.mw)}</td><td class="num monv">${g.mn && !veic ? `<span title="A exportação do RoadNet deste estado não tem a coluna ID da rota">—</span>` : fmtN(veic) + (g.semId ? `<span title="${fmtN(g.semId)} pedido(s) sem ID da rota"> *</span>` : "")}</td>
       <td class="num libv">${fmtN(g.ln)}</td><td class="num libv">${fmtR(g.lv)}</td><td class="num libv">${fmtKg(g.lw)}</td>
       <td class="num tras">${fmtN(g.tn)}</td><td class="num tras">${fmtR(g.tv)}</td><td class="num tras">${fmtKg(g.tw)}</td>
       <td class="num">${pill(pct(g.lmon, g.ln))}</td>
@@ -555,9 +568,13 @@ function renderMontados(d) {
   tab.querySelector("tfoot").innerHTML = lista.length ? linha(tot, "Total Geral", tot.veic).replace(/<td class="forte">/, "<td>") : "";
 
   const notas = [
-    "Montados = pedidos do RoadNet · Liberados = pedidos do Whyntor · Ficaram para trás = liberados que não estão nos montados · Veículos = rotas distintas (CODROTA).",
+    "Montados = pedidos do RoadNet · Liberados = pedidos do Whyntor · Ficaram para trás = liberados que não estão nos montados (ou estão como “Não atendido”) · Veículos = IDs de rota distintos (coluna “ID da rota”).",
   ];
   if (corte) notas.push(`Corte em ${dataBR(corte.slice(0, 10))} ${corte.slice(11)}: ${fmtN(tot.apos)} pedido(s) liberados depois desse horário ficaram fora da conta.`);
+  const semId = lista.filter((g) => g.mn && !g.veic.size).map((g) => g.uf);
+  if (semId.length) notas.push(`Sem coluna "ID da rota" na exportação: ${semId.join(", ")} — veículos aparecem como "—".`);
+  const naoAt = d.lib.filter((r) => r.rota === "Não atendido (RoadNet)").length;
+  if (naoAt) notas.push(`${fmtN(naoAt)} pedido(s) estão como "Não atendido" no RoadNet e contam como ficaram para trás.`);
   const semLib = d.mon.filter((m) => !m.liberado).length;
   if (semLib) notas.push(`${fmtN(semLib)} pedido(s) montados não aparecem nos liberados (veja em Detalhes → Montados sem liberação).`);
   $("notaMxL").innerHTML = notas.join("<br>");
