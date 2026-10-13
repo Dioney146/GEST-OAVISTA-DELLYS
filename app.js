@@ -272,12 +272,21 @@ function processar() {
 
 /* ---------- Filtros ---------- */
 
+// Cidades marcadas no filtro (vazio = todas)
+let cidadesSel = new Set();
+const CHAVE_CIDADES = "lxm-cidades-selecionadas";
+try { cidadesSel = new Set(JSON.parse(localStorage.getItem(CHAVE_CIDADES) || "[]")); } catch (e) { cidadesSel = new Set(); }
+
+function salvarCidades() {
+  try { localStorage.setItem(CHAVE_CIDADES, JSON.stringify([...cidadesSel])); } catch (e) { /* sem storage: segue só nesta aba */ }
+}
+
 function filtros() {
-  return { uf: $("fEstado").value, cid: $("fCidade").value, data: $("fData").value, pos: $("fPosicao").value };
+  return { uf: $("fEstado").value, cids: cidadesSel, data: $("fData").value, pos: $("fPosicao").value };
 }
 
 function filtrar(f, { ignorarData = false } = {}) {
-  const ok = (r) => (!f.uf || r.uf === f.uf) && (!f.cid || r.cid === f.cid) && (ignorarData || !f.data || r.data === f.data);
+  const ok = (r) => (!f.uf || r.uf === f.uf) && (!f.cids.size || f.cids.has(r.cid)) && (ignorarData || !f.data || r.data === f.data);
   return {
     lib: LIB.filter((r) => ok(r) && (!f.pos || r.pos === f.pos)),
     mon: MON.filter(ok),
@@ -302,11 +311,89 @@ function preencherFiltros() {
   preencherCidades();
 }
 
+/* ---------- Filtro de cidades (seleção múltipla) ---------- */
+
+let cidadesDisponiveis = []; // [{ cid, uf, n }]
+
 function preencherCidades() {
-  const uf = $("fEstado").value, sel = $("fCidade"), atual = sel.value;
-  const cids = [...new Set(LIB.filter((r) => !uf || r.uf === uf).map((r) => r.cid).filter(Boolean))].sort();
-  sel.innerHTML = `<option value="">Todas as cidades</option>` + cids.map((c) => `<option>${esc(c)}</option>`).join("");
-  sel.value = cids.includes(atual) ? atual : "";
+  const uf = $("fEstado").value, data = $("fData").value;
+  const mapa = new Map();
+  LIB.forEach((r) => {
+    if (!r.cid || (uf && r.uf !== uf) || (data && r.data !== data)) return;
+    if (!mapa.has(r.cid)) mapa.set(r.cid, { cid: r.cid, ufs: new Set(), n: 0 });
+    const c = mapa.get(r.cid); c.n++; c.ufs.add(r.uf);
+  });
+  cidadesDisponiveis = [...mapa.values()].sort((a, b) => a.cid.localeCompare(b.cid, "pt-BR"));
+  // Cidades marcadas que não existem mais no recorte continuam marcadas (podem voltar ao trocar a data),
+  // mas o texto e os chips mostram só o que está selecionado.
+  renderListaCidades();
+  atualizarRotuloCidades();
+}
+
+function renderListaCidades() {
+  const busca = normCidade($("fCidadeBusca").value);
+  const lista = busca ? cidadesDisponiveis.filter((c) => c.cid.includes(busca)) : cidadesDisponiveis;
+  $("fCidadeLista").innerHTML = lista.length ? lista.map((c) => `
+    <label class="multi-item">
+      <input type="checkbox" value="${esc(c.cid)}" ${cidadesSel.has(c.cid) ? "checked" : ""} />
+      <span class="multi-nome">${esc(c.cid)}</span>
+      <small>${[...c.ufs].join("/")} · ${fmtN(c.n)}</small>
+    </label>`).join("")
+    : `<div class="multi-vazio">Nenhuma cidade encontrada</div>`;
+  $("fCidadeLista").querySelectorAll("input").forEach((cb) => (cb.onchange = () => {
+    if (cb.checked) cidadesSel.add(cb.value); else cidadesSel.delete(cb.value);
+    aplicarCidades();
+  }));
+  $("fCidadeConta").textContent = `${fmtN(cidadesSel.size)} selecionada(s) · ${fmtN(lista.length)} exibida(s)`;
+}
+
+function atualizarRotuloCidades() {
+  const sel = [...cidadesSel].sort();
+  $("fCidadeTexto").textContent = !sel.length ? "Todas as cidades"
+    : sel.length === 1 ? sel[0]
+    : `${sel.length} cidades selecionadas`;
+  $("fCidade").classList.toggle("ativo", sel.length > 0);
+
+  const chips = $("chipsCidades");
+  chips.hidden = !sel.length;
+  chips.innerHTML = sel.length ? `<span class="chips-rotulo">Cidades:</span>` +
+    sel.map((c) => `<span class="chip-sel">${esc(c)}<button type="button" data-cid="${esc(c)}" title="Tirar do filtro">×</button></span>`).join("") +
+    `<button type="button" class="chip-limpar" id="chipsLimpar">Limpar cidades</button>` : "";
+  chips.querySelectorAll("[data-cid]").forEach((b) => (b.onclick = () => { cidadesSel.delete(b.dataset.cid); aplicarCidades(); renderListaCidades(); }));
+  if (sel.length) $("chipsLimpar").onclick = () => { cidadesSel.clear(); aplicarCidades(); renderListaCidades(); };
+}
+
+let timerCidades;
+function aplicarCidades() {
+  salvarCidades();
+  atualizarRotuloCidades();
+  $("fCidadeConta").textContent = `${fmtN(cidadesSel.size)} selecionada(s)`;
+  clearTimeout(timerCidades);
+  timerCidades = setTimeout(renderizar, 120); // marca várias seguidas sem travar
+}
+
+function abrirCidades(abrir) {
+  const painel = $("fCidadePainel");
+  painel.hidden = !abrir;
+  $("fCidade").classList.toggle("aberto", abrir);
+  if (abrir) { renderListaCidades(); setTimeout(() => $("fCidadeBusca").focus(), 0); }
+}
+
+function configurarCidades() {
+  $("fCidadeBotao").onclick = (e) => { e.stopPropagation(); abrirCidades($("fCidadePainel").hidden); };
+  $("fCidadePainel").onclick = (e) => e.stopPropagation();
+  document.addEventListener("click", () => abrirCidades(false));
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") abrirCidades(false); });
+  $("fCidadeOk").onclick = () => abrirCidades(false);
+  $("fCidadeBusca").oninput = renderListaCidades;
+  // Enter na busca marca todas as cidades exibidas
+  $("fCidadeBusca").onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); $("fCidadeMarcar").click(); } };
+  $("fCidadeMarcar").onclick = () => {
+    const busca = normCidade($("fCidadeBusca").value);
+    cidadesDisponiveis.filter((c) => !busca || c.cid.includes(busca)).forEach((c) => cidadesSel.add(c.cid));
+    aplicarCidades(); renderListaCidades();
+  };
+  $("fCidadeLimpar").onclick = () => { cidadesSel.clear(); aplicarCidades(); renderListaCidades(); };
 }
 
 /* ---------- Renderização geral ---------- */
@@ -735,8 +822,8 @@ function configurar() {
   $("btnAtualizar").onclick = async () => { await carregarHistorico(); toast("Dados atualizados"); };
 
   $("fEstado").onchange = () => { preencherCidades(); renderizar(); };
-  $("fCidade").onchange = renderizar;
-  $("fData").onchange = () => { $("fData").dataset.tocado = "1"; renderizar(); };
+  configurarCidades();
+  $("fData").onchange = () => { $("fData").dataset.tocado = "1"; preencherCidades(); renderizar(); };
   $("fPosicao").onchange = renderizar;
 
   document.querySelectorAll(".aba").forEach((b) => (b.onclick = () => trocarAba(b.dataset.aba)));

@@ -36,6 +36,10 @@ vercel.json      configuração da Vercel
    **Boa Esperança** existe nos dois estados. Para ela, o site usa a LONGITUDE do pedido:
    a leste de -42° é ES, e o resto é MG.
 3. Use os filtros **Estado**, **Cidade**, **Data de Importação** e **Posição** (L/M do Whyntor).
+   - **Cidade** aceita várias cidades: abra o filtro, busque e marque quantas quiser.
+     **Enter** na busca (ou "Marcar as exibidas") marca todas as cidades encontradas.
+   - As cidades marcadas aparecem como etiquetas abaixo dos filtros. O × tira uma cidade, e "Limpar cidades" volta para todas.
+   - A seleção fica guardada neste navegador e continua marcada quando a página é reaberta.
 
 ## Telas
 

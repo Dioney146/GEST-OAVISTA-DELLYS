@@ -62,9 +62,25 @@
         <label class="campo"><span><i class="ponto"></i> Estado</span>
           <select id="fEstado"></select>
         </label>
-        <label class="campo"><span>🏙️ Cidade</span>
-          <select id="fCidade"></select>
-        </label>
+        <div class="campo"><span>🏙️ Cidade</span>
+          <div class="multi" id="fCidade">
+            <button type="button" class="multi-botao" id="fCidadeBotao">
+              <span id="fCidadeTexto">Todas as cidades</span><i class="multi-seta"></i>
+            </button>
+            <div class="multi-painel" id="fCidadePainel" hidden>
+              <input type="search" id="fCidadeBusca" placeholder="Buscar cidade…" autocomplete="off" />
+              <div class="multi-acoes">
+                <button type="button" id="fCidadeMarcar">Marcar as exibidas</button>
+                <button type="button" id="fCidadeLimpar">Limpar seleção</button>
+              </div>
+              <div class="multi-lista" id="fCidadeLista"></div>
+              <div class="multi-rodape">
+                <span id="fCidadeConta"></span>
+                <button type="button" class="btn" id="fCidadeOk">OK</button>
+              </div>
+            </div>
+          </div>
+        </div>
         <label class="campo"><span>📅 Data de Importação</span>
           <select id="fData"></select>
         </label>
@@ -76,6 +92,7 @@
           </select>
         </label>
       </div>
+      <div class="chips-sel" id="chipsCidades" hidden></div>
     </section>
 
     <!-- VAZIO -->
